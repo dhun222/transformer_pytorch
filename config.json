@@ -1,0 +1,23 @@
+{
+    "device": "cuda", 
+
+    "tokenizer_path": "tokenizer", 
+    "vocab_size": 15000, 
+    "max_len": 500, 
+    
+    "N": 6, 
+    "d_model": 512, 
+    "num_heads": 8, 
+    "d_ff": 2048, 
+    "dropout": 0.1, 
+
+    "epoch": 10, 
+    "valid_ratio": 0.1, 
+    "warmup_steps": 4000, 
+    "batch_size": 8, 
+    "num_workers": 4, 
+
+    "beta1": 0.9, 
+    "beta2": 0.98, 
+    "eps": 10e-9 
+}
