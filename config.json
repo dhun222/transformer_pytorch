@@ -12,7 +12,7 @@
     "dropout": 0.1, 
 
     "epoch": 10, 
-    "valid_ratio": 0.02, 
+    "valid_ratio": 0.003, 
     "warmup_steps": 4000, 
     "batch_size": 16, 
     "num_workers": 8, 

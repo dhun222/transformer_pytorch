@@ -3,11 +3,11 @@ from torch import nn
 from utils import get_config
 
 class PositionEncoder(nn.Module):
-    def __init__(self, d_model: int, max_len: int = 500, dropout=0.1):
+    def __init__(self, d_model: int, max_len: int = 500, dropout=0.1, dtype=torch.float32):
         super().__init__()
-        x = torch.arange(0, max_len).unsqueeze(1)
-        x = x * (1 / 10000**(torch.arange(0, d_model, 2) / d_model))
-        pe = torch.empty(max_len, d_model)
+        x = torch.arange(0, max_len, dtype=dtype).unsqueeze(1)
+        x = x * (1 / 10000**(torch.arange(0, d_model, 2, dtype=dtype) / d_model))
+        pe = torch.empty(max_len, d_model, dtype=dtype)
         pe[:, 0::2] = torch.sin(x)
         pe[:, 1::2] = torch.cos(x)
         self.register_buffer("pe", pe)
@@ -17,9 +17,9 @@ class PositionEncoder(nn.Module):
         return self.dropout(x + self.pe[:x.shape[-2], :])
 
 class InputEmbedding(nn.Module):
-    def __init__(self, d_model, vocab_size):
+    def __init__(self, d_model, vocab_size, dtype=torch.float32):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.embedding = nn.Embedding(vocab_size, d_model, dtype=dtype)
         self.root_d_model = pow(d_model, 0.5)
     
     def forward(self, x):
@@ -30,17 +30,17 @@ class MultiHeadAttention(nn.Module):
     Multihead attention module with masking
     Key and Value are same
     '''
-    def __init__(self, d_model, num_heads, dropout=0.1):
+    def __init__(self, d_model, num_heads, dropout=0.1, dtype=torch.float32):
         super().__init__()
         assert d_model % num_heads == 0, 'd_model has to be multiple of num_head'
         self.num_heads = num_heads
         self.d_model = d_model
         self.root_d_k = d_model**(1/2)
         self.d_h = self.d_model // self.num_heads
-        self.Q_heads = nn.Linear(d_model ,d_model)
-        self.K_heads = nn.Linear(d_model, d_model)
-        self.V_heads = nn.Linear(d_model, d_model)
-        self.W_o = nn.Linear(d_model, d_model)
+        self.Q_heads = nn.Linear(d_model ,d_model, dtype=dtype)
+        self.K_heads = nn.Linear(d_model, d_model, dtype=dtype)
+        self.V_heads = nn.Linear(d_model, d_model, dtype=dtype)
+        self.W_o = nn.Linear(d_model, d_model, dtype=dtype)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, Q, K, V, mask=None):
@@ -78,12 +78,12 @@ class MultiHeadAttention(nn.Module):
         return att
 
 class FeedForward(nn.Module):
-    def __init__(self, d_model, d_ff, dropout=0.1):
+    def __init__(self, d_model, d_ff, dropout=0.1, dtype=torch.float32):
         super().__init__()
         self.layer = nn.Sequential(
-            nn.Linear(d_model, d_ff), 
+            nn.Linear(d_model, d_ff, dtype=dtype), 
             nn.ReLU(), 
-            nn.Linear(d_ff, d_model)
+            nn.Linear(d_ff, d_model, dtype=dtype)
         )
         self.dropout = nn.Dropout(dropout)
     
@@ -91,26 +91,27 @@ class FeedForward(nn.Module):
         return self.dropout(self.layer(x))
 
 class EncoderLayer(nn.Module):
-    def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.1, dtype=torch.float32):
         super().__init__()
-        self.attention_layer = MultiHeadAttention(d_model, num_heads, dropout=dropout)
-        self.norm1 = nn.LayerNorm(d_model) 
-        self.ff_layer = FeedForward(d_model, d_ff, dropout=dropout) 
-        self.norm2 = nn.LayerNorm(d_model)
+        self.attention_layer = MultiHeadAttention(d_model, num_heads, dropout=dropout, dtype=dtype)
+        self.norm1 = nn.LayerNorm(d_model, dtype=dtype) 
+        self.ff_layer = FeedForward(d_model, d_ff, dropout=dropout, dtype=dtype) 
+        self.norm2 = nn.LayerNorm(d_model, dtype=dtype)
     
     def forward(self, emb):
         x = self.norm1(emb + self.attention_layer(emb, emb, emb))
         return self.norm2(x + self.ff_layer(x))
 
 class DecoderLayer(nn.Module):
-    def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.1, dtype=torch.float32):
         super().__init__()
-        self.masked_attention_layer = MultiHeadAttention(d_model, num_heads, dropout=dropout) 
-        self.norm1 = nn.LayerNorm(d_model)
-        self.attention_layer = MultiHeadAttention(d_model, num_heads, dropout=dropout)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.ff_layer = FeedForward(d_model, d_ff)
-        self.norm3 = nn.LayerNorm(d_model)
+        self.dtype=dtype
+        self.masked_attention_layer = MultiHeadAttention(d_model, num_heads, dropout=dropout, dtype=dtype) 
+        self.norm1 = nn.LayerNorm(d_model, dtype=dtype)
+        self.attention_layer = MultiHeadAttention(d_model, num_heads, dropout=dropout, dtype=dtype)
+        self.norm2 = nn.LayerNorm(d_model, dtype=dtype)
+        self.ff_layer = FeedForward(d_model, d_ff, dtype=dtype)
+        self.norm3 = nn.LayerNorm(d_model, dtype=dtype)
 
     def forward(self, emb, context):
         mask = self.get_causal_mask(emb.shape[-2])
@@ -119,19 +120,18 @@ class DecoderLayer(nn.Module):
         return self.norm3(x + self.ff_layer(x))     
     
     def get_causal_mask(self, size):
-        mask = torch.ones((size, size))
+        mask = torch.ones((size, size), dtype=self.dtype)
         mask = torch.tril(mask) == 0
 
         return mask
 
 
 class Generator(nn.Module):
-    def __init__(self, d_model, vocab_size):
+    def __init__(self, d_model, vocab_size, dtype=torch.float32):
         super().__init__()
-        self.linear = nn.Linear(d_model, vocab_size)
+        self.linear = nn.Linear(d_model, vocab_size, dtype=dtype)
         self.softmax = nn.Softmax(dim=-1)
         self.inference = False
-
 
     def forward(self, x):
         if self.inference:
@@ -141,7 +141,7 @@ class Generator(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, N, d_model, num_heads, d_ff, vocab_size, dropout=0.1, max_len=500):
+    def __init__(self, N, d_model, num_heads, d_ff, vocab_size, dropout=0.1, max_len=500, dtype=torch.float32):
         '''
         N : number of encoder/decoder layers
         d_model : dimensions of hidden layers
@@ -150,16 +150,16 @@ class Transformer(nn.Module):
         tokenizer_path : path to pretrained tokenizer
         '''
         super().__init__()
-        self.input_embedding = InputEmbedding(d_model, vocab_size)
-        self.positional_encoder = PositionEncoder(d_model, max_len, dropout=dropout)
+        self.input_embedding = InputEmbedding(d_model, vocab_size, dtype=dtype)
+        self.positional_encoder = PositionEncoder(d_model, max_len, dropout=dropout, dtype=dtype)
         
         self.encoder = nn.ModuleList()
         self.decoder = nn.ModuleList()
         for i in range(N):
-            self.encoder.append(EncoderLayer(d_model, num_heads, d_ff, dropout=dropout))
-            self.decoder.append(DecoderLayer(d_model, num_heads, d_ff, dropout=dropout))
+            self.encoder.append(EncoderLayer(d_model, num_heads, d_ff, dropout=dropout, dtype=dtype))
+            self.decoder.append(DecoderLayer(d_model, num_heads, d_ff, dropout=dropout, dtype=dtype))
         
-        self.generator = Generator(d_model, vocab_size)
+        self.generator = Generator(d_model, vocab_size, dtype=dtype)
     
     def forward(self, encoder_input, decoder_input):
         encoder_emb = self.input_embedding(encoder_input)

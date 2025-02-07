@@ -1,2 +1,4 @@
 __pycache__
-
+dept.npy
+dest.npy
+ckpt
