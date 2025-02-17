@@ -28,6 +28,8 @@ def load_data(path):
         if file.endswith('.parquet'):
             file_list.append(file)
     
+    print(f'{len(file_list)} .parquet files are found..')
+    
     table = []
     for file in file_list:
         _table = load_parquet(os.path.join(path, file))
@@ -35,19 +37,22 @@ def load_data(path):
     return table
 
 
-def load_parquet(path):
+def load_parquet(path, omit_len=500):
     '''
     Input
         path: path for parquet file
+        omit_len: If the length of string is larger than omit_len, the string is omitted. 
     output
         table: list of tuples
     '''
     _table = pq.read_table(path)["translation"]
-    table = _table.to_pylist() 
+    _table = _table.to_pylist() 
+    keys = list(_table[0].keys())
+    table = []
+    for i, pair in enumerate(_table):
+        if len(pair[keys[0]]) < omit_len and len(pair[keys[1]]) < omit_len:
+            table.append((pair[keys[0]], pair[keys[1]]))
     del _table
-    keys = list(table[0].keys())
-    for i, pair in enumerate(table):
-        table[i] = (pair[keys[0]], pair[keys[1]])
 
     return table
 
@@ -73,7 +78,6 @@ def build_tokenizer(path, data, vocab_size=15000, max_len=500):
     tokenizer.pre_tokenizer = Whitespace()
     tokenizer.train_from_iterator(corpus, trainer)
     del corpus
-    tokenizer.post_processor = TemplateProcessing(single="[sos] $0", special_tokens=[('[sos]', 2)])
     tokenizer.enable_truncation(max_length=max_len)
     tokenizer.save(path)
     print("done")

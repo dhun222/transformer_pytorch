@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from utils import get_config
+from utils import get_config, load_tokenizer
 
 class PositionEncoder(nn.Module):
     def __init__(self, d_model: int, max_len: int = 500, dropout=0.1, dtype=torch.float32):
@@ -134,9 +134,15 @@ class Generator(nn.Module):
         self.inference = False
 
     def forward(self, x):
+        '''
+        input: [b x max_len x d_model]
+        return: [b x max_len x vocab_size] 
+        '''
         if self.inference:
+            # only outputs last token in prediction
             return self.softmax(self.linear(x[..., -1, :]))
         else:
+            # outputs whole prediction
             return self.softmax(self.linear(x))
 
 
@@ -162,28 +168,78 @@ class Transformer(nn.Module):
         self.generator = Generator(d_model, vocab_size, dtype=dtype)
     
     def forward(self, encoder_input, decoder_input):
-        encoder_emb = self.input_embedding(encoder_input)
+        context = self.encode(encoder_input)
+        out = self.decode(context, decoder_input)
+
+        return out
+
+    def encode(self, x):
+        encoder_emb = self.input_embedding(x)
         context = self.positional_encoder(encoder_emb)
         for layer in self.encoder:
             context = layer(context)
+        
+        return context
 
-        decoder_emb = self.input_embedding(decoder_input)
+    
+    def decode(self, context, x):
+        decoder_emb = self.input_embedding(x)
         out = self.positional_encoder(decoder_emb)
         for layer in self.decoder:
             out = layer(out, context)
         return self.generator(out)
     
+
+
 class Translator(nn.Module):
-    def __init__(self, h):
+    def __init__(self, h, ckpt_path):
         super().__init__()
-        transformer = Transformer(
+        self.transformer = Transformer(
             N=h.N, 
             d_model=h.d_model, 
             num_heads=h.num_heads, 
             d_ff=h.d_ff, 
-            dropout=h.droput, 
-            max_len=h.max_len
+            dropout=h.dropout, 
+            max_len=h.max_len, 
+            vocab_size=h.vocab_size
         )
+
+        ckpt = torch.load(ckpt_path)
+
+        self.transformer.load_state_dict(ckpt['model_state_dict'])
+        self.transformer.generator.inference = True
+        self.transformer.eval()
+
+        self.tokenizer = load_tokenizer(h.tokenizer_path)
+
+        self.max_len = h.max_len
         
+    
     def forward(self, x):
+        '''
+        x: list of input strings
+        return: translated string 
+        '''
+        out_arr = []
+        for string in x:
+            dept = self.tokenizer.encode(string).ids
+            dept = torch.tensor(dept, dtype=torch.int32).unsqueeze(0)
+            decoder_input = torch.tensor(self.tokenizer.get_vocab()['[sos]'], dtype=torch.int32).unsqueeze(0)
+
+            context = self.transformer.encode(dept)
+
+            for i in range(self.max_len):
+                with torch.no_grad():
+                    new_word = self.transformer.decode(context, decoder_input)
+            
+                new_word.unsqueeze(0)
+                new_word = new_word.argmax(keepdim=True)
+
+                if new_word == self.tokenizer.get_vocab()['[eos]']:
+                    break
+                decoder_input = torch.cat((decoder_input, new_word))
+            print(decoder_input)
+            
+            out_arr.append(self.tokenizer.decode(decoder_input.tolist()))
+
         return

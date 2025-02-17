@@ -1,10 +1,10 @@
 from model import Transformer
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 import os
 from utils import build_tokenizer ,load_tokenizer, load_data, get_config
-from textDataset import get_and_split_dataset
+from textDataset import get_and_split_dataset, IdxSampler
 from time import time
 from tqdm import tqdm
 
@@ -24,6 +24,7 @@ def train(h, data_path, ckpt_path):
     print(f"\tnum_heads: {h.num_heads}")
     print(f"\td_ff: {h.d_ff}")
     print(f"\tDropout: {h.dropout}")
+    print(f"\tmax_len: {h.max_len}")
 
     print("\nTraining configuration: ")
     print(f"\tEpoch: {h.epoch}")
@@ -47,17 +48,26 @@ def train(h, data_path, ckpt_path):
     ).to(device)
     print('model built')
 
+    print('loading data...')
+    table = load_data(data_path)
     if os.path.exists(h.tokenizer_path):
         tokenizer = load_tokenizer(h.tokenizer_path)
     else:
-        print('loading data...')
-        table = load_data(data_path)
         print('done')
-
         tokenizer = build_tokenizer(h.tokenizer_path, table, max_len=h.max_len, vocab_size=h.vocab_size)
+
+    dataset, train_sampler, valid_sampler = get_and_split_dataset(table, tokenizer, h.max_len, h.valid_ratio)
+
+    train_loader = DataLoader(dataset, batch_size=h.batch_size, num_workers=h.num_workers, sampler=train_sampler)
+    valid_loader = DataLoader(dataset, batch_size=h.batch_size, num_workers=h.num_workers, sampler=valid_sampler) 
+
+    optimizer = torch.optim.Adam(transformer.parameters(), betas=(h.beta1, h.beta2), eps=h.eps)
+    scheduler = Scheduler(optimizer, h.d_model, h.warmup_steps)
+    loss_function = torch.nn.CrossEntropyLoss(label_smoothing=0.1).to(device)
 
     epoch = 0
     batch = 0
+    loader = train_loader
     if os.path.exists(ckpt_path):
         ckpt = torch.load(ckpt_path)
         print('loading ckpt...')
@@ -66,24 +76,20 @@ def train(h, data_path, ckpt_path):
         transformer.load_state_dict(ckpt['model_state_dict'])
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+        init_sampler = IdxSampler(range(batch, len(dataset)))
+        loader = DataLoader(dataset, batch_size=h.batch_size, num_workers=h.num_workers, sampler=init_sampler)
         print(f'epoch: {epoch}, batch: {batch} / {len(train_loader)}')
 
-    dataset, train_sampler, valid_sampler = get_and_split_dataset(None, tokenizer, h.max_len, h.valid_ratio)
-
-    train_loader = DataLoader(dataset, batch_size=h.batch_size, num_workers=h.num_workers, sampler=train_sampler)
-    valid_loader = DataLoader(dataset, batch_size=h.batch_size, num_workers=h.num_workers, sampler=valid_sampler) 
     print('data split done')
 
-    optimizer = torch.optim.Adam(transformer.parameters(), betas=(h.beta1, h.beta2), eps=h.eps)
-    scheduler = Scheduler(optimizer, h.d_model, h.warmup_steps)
-    loss_function = torch.nn.CrossEntropyLoss(label_smoothing=0.1).to(device)
-
-    
+    '''
     # to start training from in the middle of dataset. There might be better way...
     train_loader_iter = train_loader.__iter__()
     for i in tqdm(range(batch)):
         train_loader_iter.__next__()
+    '''
 
+    sw = SummaryWriter("log/")
     
     step = 0
     for e in range(epoch, h.epoch):
@@ -91,27 +97,29 @@ def train(h, data_path, ckpt_path):
         print(f'epoch: {e + 1}')
 
         transformer.train()
-        train_len = len(train_loader)
-        while True:
-            try:
-                dept, dest = train_loader_iter.__next__()
+        iterator = tqdm(loader, initial=batch)
+        for i, (dept, dest, ground_truth) in enumerate(iterator):
                 b_start = time()
 
                 optimizer.zero_grad()
                 dept = dept.to(device)
                 dest = dest.to(device)
+                ground_truth = ground_truth.to(device)
 
                 pred = transformer(dept, dest)
 
-                loss = loss_function(pred.reshape(-1, h.vocab_size), dest.reshape(-1, 1).squeeze(1))
+                loss = loss_function(pred.reshape(-1, h.vocab_size), ground_truth.reshape(1, -1).squeeze(0))
+                iterator.set_postfix_str(f'train error: {loss.item()}', refresh=True)
                 loss.backward()
+                sw.add_scalar("train_err", loss.item(), step) 
 
                 optimizer.step()
                 scheduler.step()
+                sw.add_scalar("learning_rate", scheduler.get_last_lr()[0], step)
 
                 batch += 1
                 step += 1
-                if step % 10000 == 0:
+                if step % 10000 == 100:
                     torch.save(
                         {
                             'epoch': e, 
@@ -126,33 +134,25 @@ def train(h, data_path, ckpt_path):
                 b_end = time()
                 b_time = b_end - b_start
 
-                print(f"\r", end="")
-                progress = int((batch / train_len) * 50)
-                for i in range(50):
-                    if i < progress:
-                        print("|", end="")
-                    else:
-                        print(" ", end="")
-                print(f": {batch} / {train_len}. {int(b_time * 1000)}ms/batch. estimated: {(train_len - batch) * b_time / 3600:0.2f}h.", end="")
-
-
-            except StopIteration:
-                print("break")
-                break
+        loader = train_loader        
 
         transformer.eval()
         valid_error = 0
         print("validation")
-        for (dept, dest) in tqdm(valid_loader):
+        for (dept, dest, ground_truth) in tqdm(valid_loader):
             dept = dept.to(device)
             dest = dest.to(device)
+            ground_truth = ground_truth.to(device)
             with torch.no_grad():
-                pred =transformer(dept, dest)
-                valid_error = loss_function(pred.reshape(-1, h.vocab_size), dest.reshape(-1, 1).squeeze(1)).item()
+                pred = transformer(dept, dest)
+            valid_error = loss_function(pred.reshape(-1, h.vocab_size), ground_truth.reshape(1, -1).squeeze(0)).item()
 
         end_time = time()
-        print(f'time: {end_time - start_time}, valid error: {valid_error / len(valid_sampler)}')
-
+        valid_error = valid_error / len(valid_loader)
+        print(f'time: {end_time - start_time}, valid error: {valid_error}')
+        sw.add_scalar('valid_err', valid_error)
+    
+    sw.close()
     
 def main():
     data_path = '/home/dhhyun/data/train'

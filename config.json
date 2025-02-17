@@ -3,17 +3,17 @@
 
     "tokenizer_path": "tokenizer", 
     "vocab_size": 15000, 
-    "max_len": 500, 
+    "max_len": 100, 
     
-    "N": 3, 
+    "N": 5, 
     "d_model": 256, 
     "num_heads": 4, 
     "d_ff": 1024, 
     "dropout": 0.1, 
 
-    "epoch": 10, 
+    "epoch": 3, 
     "valid_ratio": 0.003, 
-    "warmup_steps": 4000, 
+    "warmup_steps": 1000, 
     "batch_size": 16, 
     "num_workers": 8, 
 
