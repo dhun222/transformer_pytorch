@@ -78,7 +78,7 @@ def build_tokenizer(path, data, vocab_size=15000, max_len=500):
     tokenizer.pre_tokenizer = Whitespace()
     tokenizer.train_from_iterator(corpus, trainer)
     del corpus
-    tokenizer.enable_truncation(max_length=max_len)
+    tokenizer.enable_truncation(max_length=max_len - 1)
     tokenizer.save(path)
     print("done")
     

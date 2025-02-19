@@ -2,7 +2,7 @@
   "version": "1.0",
   "truncation": {
     "direction": "Right",
-    "max_length": 100,
+    "max_length": 99,
     "strategy": "LongestFirst",
     "stride": 0
   },

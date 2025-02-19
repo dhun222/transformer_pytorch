@@ -130,7 +130,6 @@ class Generator(nn.Module):
     def __init__(self, d_model, vocab_size, dtype=torch.float32):
         super().__init__()
         self.linear = nn.Linear(d_model, vocab_size, dtype=dtype)
-        self.softmax = nn.Softmax(dim=-1)
         self.inference = False
 
     def forward(self, x):
@@ -140,10 +139,11 @@ class Generator(nn.Module):
         '''
         if self.inference:
             # only outputs last token in prediction
-            return self.softmax(self.linear(x[..., -1, :]))
+            return self.linear(x[..., -1, :])
         else:
             # outputs whole prediction
-            return self.softmax(self.linear(x))
+            return self.linear(x)
+        
 
 
 class Transformer(nn.Module):
